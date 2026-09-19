@@ -1,5 +1,10 @@
 # TypeSafe for Rust
 
+[![crates.io](https://img.shields.io/crates/v/typesafe-rust-sdk.svg)](https://crates.io/crates/typesafe-rust-sdk)
+[![docs.rs](https://img.shields.io/docsrs/typesafe-rust-sdk)](https://docs.rs/typesafe-rust-sdk)
+[![MSRV](https://img.shields.io/crates/msrv/typesafe-rust-sdk)](https://github.com/phiat/typesafe-rust-sdk/blob/main/Cargo.toml)
+[![License: MIT](https://img.shields.io/crates/l/typesafe-rust-sdk)](LICENSE)
+
 A Rust client for [TypeSafe](https://docs.typesafe.ai/)'s System One API, the API
 behind **Jev**. It is unofficial and not published by TypeSafe. Its behaviour follows
 the official Python SDK:
