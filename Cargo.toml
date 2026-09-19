@@ -1,0 +1,48 @@
+[package]
+name = "typesafe-rust-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Unofficial Rust client for TypeSafe's System One API (Jev)"
+license = "MIT"
+repository = "https://github.com/phiat/typesafe-rust-sdk"
+readme = "README.md"
+categories = ["api-bindings", "web-programming::http-client"]
+keywords = ["typesafe", "jev", "system-one", "classification", "api-client"]
+
+[lib]
+# `use typesafe::...`
+name = "typesafe"
+
+[features]
+default = ["async", "rustls"]
+# `typesafe::Client`, for a tokio runtime.
+async = ["dep:tokio"]
+# `typesafe::blocking::Client`, for synchronous code such as a game loop.
+blocking = ["reqwest/blocking"]
+# TLS backends. With neither, only plain-HTTP base URLs work.
+rustls = ["reqwest/rustls"]
+native-tls = ["reqwest/native-tls"]
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+httpdate = "1"
+fastrand = "2"
+tokio = { version = "1", features = ["time"], optional = true }
+
+[dev-dependencies]
+mockito = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[example]]
+name = "triage"
+required-features = ["blocking"]
+
+[[example]]
+name = "factcheck"
+required-features = ["async"]
