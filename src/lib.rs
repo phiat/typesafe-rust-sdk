@@ -46,9 +46,12 @@
 //!
 //! - `async` (default): [`Client`], for a tokio runtime
 //! - `blocking`: [`blocking::Client`], for synchronous code
+//! - `gzip` and `zstd`: request-body compression, off unless asked for
+//!   ([`Compression`])
 //! - `rustls` (default) or `native-tls`: the TLS backend
 
 mod answer;
+mod compression;
 mod config;
 mod error;
 mod image;
@@ -65,6 +68,7 @@ mod client;
 pub use answer::{Answer, BoxAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer};
 #[cfg(feature = "async")]
 pub use client::Client;
+pub use compression::Compression;
 pub use config::{
     CallOptions, Config, DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT, ENV_API_KEY,
     ENV_BASE_URL, ENV_DEFAULT_MODEL,

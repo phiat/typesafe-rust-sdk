@@ -63,9 +63,11 @@ The library is named `typesafe`, so code says `use typesafe::...`.
 | `async` (default) | `typesafe::Client`, which needs a tokio runtime with the time driver (`#[tokio::main]` has it) |
 | `blocking` | `typesafe::blocking::Client`, which must not be called from inside an async runtime |
 | `rustls` (default), `native-tls` | the TLS backend; with neither, only `http://` base URLs work |
+| `gzip` | `Compression::Gzip`, pure Rust ([compression](#compression)) |
+| `zstd` | `Compression::Zstd`, faster and smaller than gzip, but needs a C compiler to build |
 
 It uses `reqwest`, `serde_json`, `httpdate` and `fastrand`, plus `tokio` for the async
-client.
+client, `flate2` for `gzip` and `zstd` for `zstd`.
 
 ## Questions and answers
 
@@ -233,6 +235,7 @@ let handles: Vec<_> = tickets
 | `model` | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
 | `timeout` | | 10 s per response |
 | `retry` | | see below |
+| `compression` | | off; see [compression](#compression) |
 | `header` | | extra request headers |
 
 ```rust
@@ -255,6 +258,31 @@ Calls then fail with `ErrorKind::NoApiKey` without making a request.
 and headers for one call, to attach [images](#images-and-box-questions) with `image`,
 and to raise the context limits with `long_context`. `CallOptions::extra_body` adds
 top-level fields for API features this client predates.
+
+## Compression
+
+The API accepts request bodies compressed with gzip or zstd. It pays on large states,
+such as a long document or a chat log, and saves upload time on a slow link. It is off
+unless you ask, and each codec is a cargo feature, so a build only carries what it uses:
+
+```toml
+typesafe-rust-sdk = { version = "0.2", features = ["zstd"] }   # or "gzip"
+```
+
+```rust
+use typesafe::{CallOptions, Compression, Config};
+
+let config = Config::from_env().compression(Compression::Zstd);   // every call
+let options = CallOptions::new().compression(Compression::Off);   // override one call
+```
+
+- **Bodies under 1 KiB are sent as they are**, as the official SDKs do. Larger ones
+  get a `Content-Encoding` header.
+- **Retries resend the same compressed bytes.** The body is compressed once per call.
+- **Requests with images** are compressed whole. The images won't shrink, since PNG
+  and JPEG are already compressed, so it only helps when the state is large text.
+- **zstd** uses its default level (3), whose 2 MiB window is well inside the 8 MiB the
+  API accepts. It is what the official Python SDK uses by default.
 
 ## Errors and retries
 
