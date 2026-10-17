@@ -10,7 +10,7 @@
 mod common;
 
 use typesafe::blocking::Client;
-use typesafe::{Config, ErrorKind, Noul, Questions};
+use typesafe::{CallOptions, Config, ErrorKind, Image, Noul, Questions};
 
 fn client() -> Client {
     let client = Client::new();
@@ -49,6 +49,71 @@ fn answers_all_three_types_in_one_call() {
         urgency.legend.keys().copied().collect::<Vec<_>>(),
         [0, 1, 2]
     );
+}
+
+#[test]
+#[ignore = "calls the live API"]
+fn locates_a_rectangle_in_a_png() {
+    let photo = common::red_rectangle();
+    let response = client()
+        .system_one_with(
+            &serde_json::json!({"photo": photo}),
+            &common::rectangle_questions(),
+            // A Box question needs jev-1.14.0 (or jev-preview); jev-latest was 1.13.
+            &CallOptions::new().model("jev-1.14.0").image(&photo),
+        )
+        .unwrap();
+
+    assert_eq!(response.model, "jev-1.14.0");
+    assert!(response.noul("present").unwrap().yes());
+    let rect = response.bounding_box("rect").unwrap();
+    assert!(rect.left < rect.right && rect.top < rect.bottom, "{rect:?}");
+    // The rectangle is at left 0.5, right 0.9, top 0.2, bottom 0.5.
+    for (got, want) in [
+        (rect.left, 0.5),
+        (rect.right, 0.9),
+        (rect.top, 0.2),
+        (rect.bottom, 0.5),
+    ] {
+        assert!(
+            (got - want).abs() < 0.15,
+            "{got} is not near {want}: {rect:?}"
+        );
+    }
+    assert!(rect.confidence.unwrap() > 0.5);
+}
+
+#[test]
+#[ignore = "calls the live API"]
+fn reads_a_jpeg_on_the_default_model() {
+    let photo = Image::from_path(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/red-rectangle.jpg"
+    ))
+    .unwrap();
+    let questions = Questions::new().ask("red", Noul::new("Does `photo` contain a red shape?"));
+    let response = client()
+        .system_one_with(
+            &serde_json::json!({"photo": photo}),
+            &questions,
+            &CallOptions::new().image(&photo),
+        )
+        .unwrap();
+    assert!(response.noul("red").unwrap().yes());
+}
+
+#[test]
+#[ignore = "calls the live API"]
+fn accepts_the_long_context_header() {
+    let questions = Questions::new().ask("hello", Noul::new("Is this a greeting?"));
+    let response = client()
+        .system_one_with(
+            "Hello there!",
+            &questions,
+            &CallOptions::new().long_context(),
+        )
+        .unwrap();
+    assert!(response.noul("hello").unwrap().yes());
 }
 
 #[test]

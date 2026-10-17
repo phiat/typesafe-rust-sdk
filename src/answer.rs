@@ -101,6 +101,36 @@ impl ScoreAnswer {
     }
 }
 
+/// The answer to a [`BoxQuestion`](crate::BoxQuestion): where something is in
+/// an image.
+///
+/// The edges are fractions from 0 to 1, measured from the image's top-left
+/// corner: `left` and `right` of its width, `top` and `bottom` of its height.
+/// Multiply by the image's pixel size to crop or draw the box.
+///
+/// - `confidence`: how sure the model is, from 0 to 1, when it says
+///
+/// There is no "not found" answer: a target that isn't there still gets a box,
+/// with low confidence. Ask a [`Noul`](crate::Noul) about presence in the same
+/// call and ignore the box when that comes back low.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoxAnswer {
+    pub top: f64,
+    pub bottom: f64,
+    pub left: f64,
+    pub right: f64,
+    pub confidence: Option<f64>,
+}
+
+impl BoxAnswer {
+    /// The box in pixels for an image `width` by `height`, as
+    /// `(left, top, right, bottom)`.
+    pub fn pixels(&self, width: u32, height: u32) -> (f64, f64, f64, f64) {
+        let (w, h) = (f64::from(width), f64::from(height));
+        (self.left * w, self.top * h, self.right * w, self.bottom * h)
+    }
+}
+
 /// Any one answer. Its variant matches the question that asked it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -108,6 +138,7 @@ pub enum Answer {
     Noul(NoulAnswer),
     Choice(ChoiceAnswer),
     Score(ScoreAnswer),
+    Box(BoxAnswer),
     /// The answer to a [`Question::Raw`], as the server sent it.
     Raw(Value),
 }
@@ -130,6 +161,13 @@ impl Answer {
     pub fn as_score(&self) -> Option<&ScoreAnswer> {
         match self {
             Answer::Score(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn as_box(&self) -> Option<&BoxAnswer> {
+        match self {
+            Answer::Box(a) => Some(a),
             _ => None,
         }
     }
@@ -210,6 +248,26 @@ fn decode(question: &Question, raw: &Value) -> Result<Answer, String> {
                 confidence: number(raw, "confidence")?,
             }))
         }
+        Question::Box(_) => {
+            expect_type(raw, "box")?;
+            let edges = raw
+                .get("box")
+                .and_then(Value::as_object)
+                .ok_or_else(|| "box".to_string())?;
+            let edge = |name: &str| number(edges, name).map_err(|name| format!("box.{name}"));
+            // The Python SDK types it `float | None`: a missing one is not an error.
+            let confidence = match raw.get("confidence") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(number(raw, "confidence")?),
+            };
+            Ok(Answer::Box(BoxAnswer {
+                top: edge("top")?,
+                bottom: edge("bottom")?,
+                left: edge("left")?,
+                right: edge("right")?,
+                confidence,
+            }))
+        }
         Question::Raw(_) => unreachable!("handled above"),
     }
 }
@@ -258,11 +316,12 @@ fn index_keys<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Choice, Noul, Score};
+    use crate::{BoxQuestion, Choice, Noul, Score};
     use serde_json::json;
 
     fn questions() -> Questions {
         Questions::new()
+            .ask("mug", BoxQuestion::new("The mug in `photo`"))
             .ask("billing", Noul::new("Billing?"))
             .ask(
                 "tone",
@@ -277,6 +336,9 @@ mod tests {
 
     fn answers() -> Value {
         json!({
+            "mug": {"type": "box",
+                    "box": {"top": 0.25, "bottom": 0.75, "left": 0.1, "right": 0.5},
+                    "confidence": 0.95},
             "billing": {"type": "noul", "noul": 0.99},
             "tone": {"type": "choice", "choice": "frustrated",
                      "probabilities": {"calm": 0.0, "frustrated": 0.86, "angry": 0.14},
@@ -311,10 +373,31 @@ mod tests {
         assert_eq!(urgency.legend[&1], json!("This week"));
         assert!((urgency.normalized() - 0.995).abs() < 1e-9);
 
+        let mug = decoded["mug"].as_box().unwrap();
+        assert_eq!(
+            (mug.top, mug.bottom, mug.left, mug.right),
+            (0.25, 0.75, 0.1, 0.5)
+        );
+        assert_eq!(mug.confidence, Some(0.95));
+        assert_eq!(mug.pixels(200, 100), (20.0, 25.0, 100.0, 75.0));
+
         assert_eq!(
             decoded["future"].as_raw().unwrap(),
             &json!({"type": "future", "whatever": [1, 2]})
         );
+    }
+
+    #[test]
+    fn a_box_may_lack_confidence() {
+        for confidence in [None, Some(Value::Null)] {
+            let mut answers = answers();
+            match confidence {
+                None => drop(answers["mug"].as_object_mut().unwrap().remove("confidence")),
+                Some(null) => answers["mug"]["confidence"] = null,
+            }
+            let decoded = decode_all(&questions(), Some(&answers)).unwrap();
+            assert_eq!(decoded["mug"].as_box().unwrap().confidence, None);
+        }
     }
 
     #[test]
@@ -342,6 +425,15 @@ mod tests {
         assert_eq!(
             broken("urgency.legend", json!({"one": "x"})),
             "answers.urgency.legend.one"
+        );
+        assert_eq!(
+            broken("mug.box", json!({"top": 0.1, "bottom": 0.2, "left": 0.1})),
+            "answers.mug.box.right"
+        );
+        assert_eq!(broken("mug.box", json!("here")), "answers.mug.box");
+        assert_eq!(
+            broken("mug.confidence", json!("high")),
+            "answers.mug.confidence"
         );
 
         let mut missing = answers();

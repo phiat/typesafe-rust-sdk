@@ -23,6 +23,8 @@ pub enum ErrorKind {
     PermissionDenied,
     /// 404
     NotFound,
+    /// 413. The body is over 32 MiB, as it can be with images.
+    PayloadTooLarge,
     /// 422. The message lists each field as `path: problem`.
     UnprocessableEntity,
     /// 429
@@ -48,6 +50,7 @@ impl ErrorKind {
             401 => ErrorKind::Authentication,
             403 => ErrorKind::PermissionDenied,
             404 => ErrorKind::NotFound,
+            413 => ErrorKind::PayloadTooLarge,
             422 => ErrorKind::UnprocessableEntity,
             429 => ErrorKind::RateLimited,
             529 => ErrorKind::Overloaded,
@@ -287,7 +290,7 @@ mod tests {
 
     #[test]
     fn maps_statuses() {
-        let kinds: Vec<ErrorKind> = [400, 401, 403, 404, 422, 429, 529, 500, 503, 418]
+        let kinds: Vec<ErrorKind> = [400, 401, 403, 404, 413, 422, 429, 529, 500, 503, 418]
             .into_iter()
             .map(ErrorKind::for_status)
             .collect();
@@ -298,6 +301,7 @@ mod tests {
                 ErrorKind::Authentication,
                 ErrorKind::PermissionDenied,
                 ErrorKind::NotFound,
+                ErrorKind::PayloadTooLarge,
                 ErrorKind::UnprocessableEntity,
                 ErrorKind::RateLimited,
                 ErrorKind::Overloaded,

@@ -137,6 +137,39 @@ impl Score {
     }
 }
 
+/// A question that locates something in an image. The answer is a
+/// [`BoxAnswer`](crate::BoxAnswer): the box's four edges, as fractions of the
+/// image.
+///
+/// Name the image in the instructions by its key in the state, in backticks, or
+/// put the [`Image`](crate::Image) itself in the instructions. Attach the image
+/// to the call with [`CallOptions::image`](crate::CallOptions::image).
+///
+/// A Box question needs `jev-1.14.0` or later, or `jev-preview`. Older models,
+/// and `jev-latest` while it still points at one, reject it with a plain 400.
+/// It always answers with a box, even when the target is absent, so ask a
+/// [`Noul`] about presence in the same call and ignore the box when that comes
+/// back low.
+///
+/// ```
+/// use typesafe::BoxQuestion;
+///
+/// let mug = BoxQuestion::new("The coffee mug in `photo`");
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoxQuestion {
+    instructions: Value,
+}
+
+impl BoxQuestion {
+    /// `instructions` says what to find: a phrase, not a yes/no question.
+    pub fn new(instructions: impl Into<Value>) -> Self {
+        BoxQuestion {
+            instructions: instructions.into(),
+        }
+    }
+}
+
 /// Any one question.
 ///
 /// [`Question::Raw`] holds a question as its JSON, sent as given. Its answer
@@ -148,6 +181,7 @@ pub enum Question {
     Noul(Noul),
     Choice(Choice),
     Score(Score),
+    Box(BoxQuestion),
     Raw(Value),
 }
 
@@ -166,6 +200,12 @@ impl From<Choice> for Question {
 impl From<Score> for Question {
     fn from(q: Score) -> Self {
         Question::Score(q)
+    }
+}
+
+impl From<BoxQuestion> for Question {
+    fn from(q: BoxQuestion) -> Self {
+        Question::Box(q)
     }
 }
 
@@ -220,6 +260,11 @@ impl Questions {
         self.0.iter().map(|(k, q)| (k.as_str(), q))
     }
 
+    /// Whether any question is a [`BoxQuestion`], which needs an image.
+    pub(crate) fn has_box(&self) -> bool {
+        self.0.iter().any(|(_, q)| matches!(q, Question::Box(_)))
+    }
+
     /// Checks the questions before anything is sent. The error message names
     /// the question at fault.
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -256,6 +301,11 @@ impl<K: Into<String>, Q: Into<Question>> Extend<(K, Q)> for Questions {
     }
 }
 
+/// The most options the API takes in one Choice.
+const MAX_CHOICE_OPTIONS: usize = 255;
+/// The most levels the API takes in one Score.
+const MAX_SCORE_LEVELS: usize = 10;
+
 fn validate_question(question: &Question) -> Result<(), String> {
     match question {
         Question::Noul(q) => {
@@ -264,10 +314,17 @@ fn validate_question(question: &Question) -> Result<(), String> {
                 check_description(description, "Noul criteria")?;
             }
         }
+        Question::Box(q) => check_instructions(&q.instructions)?,
         Question::Choice(q) => {
             check_instructions(&q.instructions)?;
             if q.options.is_empty() {
                 return Err("a Choice needs at least one option".into());
+            }
+            if q.options.len() > MAX_CHOICE_OPTIONS {
+                return Err(format!(
+                    "a Choice takes at most {MAX_CHOICE_OPTIONS} options, got {}",
+                    q.options.len()
+                ));
             }
             for (i, (name, description)) in q.options.iter().enumerate() {
                 if name.is_empty() {
@@ -284,6 +341,12 @@ fn validate_question(question: &Question) -> Result<(), String> {
             if q.levels.len() < 2 {
                 return Err(format!(
                     "a Score needs at least two levels, got {}",
+                    q.levels.len()
+                ));
+            }
+            if q.levels.len() > MAX_SCORE_LEVELS {
+                return Err(format!(
+                    "a Score takes at most {MAX_SCORE_LEVELS} levels, got {}",
                     q.levels.len()
                 ));
             }
@@ -368,6 +431,12 @@ impl Serialize for Question {
                 map.serialize_entry("criteria", &q.levels)?;
                 map.end()
             }
+            Question::Box(q) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "box")?;
+                map.serialize_entry("instructions", &q.instructions)?;
+                map.end()
+            }
             Question::Raw(raw) => raw.serialize(serializer),
         }
     }
@@ -416,6 +485,7 @@ mod tests {
             .ask("l", Noul::new("On?").yes("Lights on").no("Lights off"))
             .ask("t", Choice::new("Tone?").options(["calm", "angry"]))
             .ask("u", Score::new("Urgent?", ["Can wait", "Today"]))
+            .ask("x", BoxQuestion::new("The mug in `photo`"))
             .ask("r", Question::Raw(json!({"type": "future", "x": 1})));
         assert_eq!(
             serde_json::from_str::<Value>(&wire(&questions)).unwrap(),
@@ -426,9 +496,12 @@ mod tests {
                 "t": {"type": "choice", "instructions": "Tone?",
                       "criteria": {"calm": null, "angry": null}},
                 "u": {"type": "score", "instructions": "Urgent?", "criteria": ["Can wait", "Today"]},
+                "x": {"type": "box", "instructions": "The mug in `photo`"},
                 "r": {"type": "future", "x": 1},
             })
         );
+        assert!(questions.has_box());
+        assert!(!Questions::new().ask("b", Noul::new("Is it?")).has_box());
     }
 
     #[test]
@@ -486,6 +559,18 @@ mod tests {
                 .contains("at least two levels")
         );
         assert!(
+            problem(Questions::new().ask("q", Score::new("How?", (0..11).map(|i| i.to_string()))))
+                .contains("at most 10 levels")
+        );
+        assert!(
+            problem(Questions::new().ask(
+                "q",
+                Choice::new("Which?").options((0..256).map(|i| i.to_string()))
+            ))
+            .contains("at most 255 options")
+        );
+        assert!(problem(Questions::new().ask("q", BoxQuestion::new(" "))).contains("instructions"));
+        assert!(
             problem(Questions::new().ask("q", Question::Raw(json!({"no": "type"}))))
                 .contains("\"type\"")
         );
@@ -499,6 +584,13 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+        let at_the_limits = Questions::new()
+            .ask("s", Score::new("How?", (0..10).map(|i| i.to_string())))
+            .ask(
+                "c",
+                Choice::new("Which?").options((0..255).map(|i| i.to_string())),
+            );
+        assert!(at_the_limits.validate().is_ok());
     }
 
     #[test]

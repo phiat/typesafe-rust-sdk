@@ -49,12 +49,12 @@ response.usage                                 // Usage { input_tokens: 367, out
 
 ```toml
 [dependencies]
-typesafe-rust-sdk = "0.1"
+typesafe-rust-sdk = "0.2"
 ```
 
 That gives the async client. For the blocking one as well, use
-`{ version = "0.1", features = ["blocking"] }`, or for the blocking one alone,
-`{ version = "0.1", default-features = false, features = ["blocking", "rustls"] }`.
+`{ version = "0.2", features = ["blocking"] }`, or for the blocking one alone,
+`{ version = "0.2", default-features = false, features = ["blocking", "rustls"] }`.
 
 The library is named `typesafe`, so code says `use typesafe::...`.
 
@@ -74,6 +74,7 @@ client.
 | `Noul::new(instructions)` | whether a condition holds | `NoulAnswer`: `noul`, the probability of yes |
 | `Choice::new(instructions)` | which one of a defined set | `ChoiceAnswer`: `choice`, `probabilities`, `confidence` |
 | `Score::new(instructions, levels)` | how far along ordered levels | `ScoreAnswer`: `score`, `legend`, `probabilities`, `confidence` |
+| `BoxQuestion::new(instructions)` | where something is in an [image](#images-and-box-questions) | `BoxAnswer`: `top`, `bottom`, `left`, `right`, `confidence` |
 
 ```rust
 use typesafe::{Choice, Noul};
@@ -113,7 +114,69 @@ sent as given, and its answer comes back as `Answer::Raw`. That covers question 
 this client predates.
 
 Malformed questions, such as a Choice with no options, are rejected with
-`ErrorKind::InvalidRequest` before anything is sent.
+`ErrorKind::InvalidRequest` before anything is sent. So are Choices with more than 255
+options and Scores with more than 10 levels, which the API refuses.
+
+## Images and Box questions
+
+A `BoxQuestion` finds something in an image and answers with a box. Images work with
+any question type: a Noul can ask whether a person is in a photo, a Choice what kind
+of document a scan is.
+
+An `Image` is a PNG or JPEG. It stands in a request by its *reference*, a string. Put
+the `Image` where it belongs in the state or in a question, and attach it to the call:
+
+```rust
+use serde_json::json;
+use typesafe::{BoxQuestion, CallOptions, Image, Noul, Questions};
+
+let photo = Image::from_path("kitchen.jpg")?;
+
+let questions = Questions::new()
+    .ask("mug_present", Noul::new("Is there a coffee mug in `photo`?"))
+    .ask("mug", BoxQuestion::new("The coffee mug in `photo`"));
+
+let response = client.system_one_with(
+    &json!({ "photo": photo }),
+    &questions,
+    &CallOptions::new().model("jev-1.14.0").image(&photo),
+)?;
+
+if response.noul("mug_present").unwrap().yes_above(0.5) {
+    let mug = response.bounding_box("mug").unwrap();
+    let (left, top, right, bottom) = mug.pixels(1024, 768); // for a 1024x768 image
+}
+```
+
+- **Box needs `jev-1.14.0` or later**, or the `jev-preview` alias. `jev-latest` stays
+  on `jev-1.13.0` until 1.14 is promoted, and a Box question sent to it is rejected
+  with a plain `400`.
+- **Edges are fractions.** `left` and `right` are fractions of the width, `top` and
+  `bottom` of the height, from the top-left corner. `BoxAnswer::pixels` scales them
+  to an image of known size.
+- **A box always comes back.** There is no "not found" answer, so a target that isn't
+  there still gets a box, with low confidence. Ask a Noul about presence in the same
+  call, as above, and ignore the box when it is low. `BoxAnswer::confidence` is an
+  `Option` because the API may leave it out.
+- **The type is `BoxQuestion`**, and the accessor `bounding_box`, because `Box` would
+  shadow `std::boxed::Box` and `box` is a reserved word.
+- **Images work on `jev-1.13.0` too.** They are billed as input tokens, and each place
+  a reference is used sends another copy of the image.
+- **Reference the image by name or by value.** The state can be `json!({"photo":
+  photo})` with questions saying `` `photo` ``, or you can write the reference into a
+  string with `format!("... {photo} ...")`.
+- **Mistakes are caught before sending.** An image nothing refers to, a reference
+  whose image was never attached, and a Box question with no image all fail with
+  `ErrorKind::InvalidRequest`. The API would otherwise answer with an opaque `400`, or
+  for the last two, silently answer about text and not the picture.
+- **Limits.** Each side must be 280 to 1568 pixels, a file at most 16 MiB, and the
+  request at most 32 MiB. Images outside that are rejected by the API (`400`, or `413`
+  as `ErrorKind::PayloadTooLarge`), not resized. Rotate pixels upright first: EXIF
+  orientation is ignored. Convert GIF, WebP and HEIC to PNG or JPEG; `Image::from_bytes`
+  refuses them.
+- **Transport.** Images go as a `multipart/form-data` upload, which the API recommends
+  over base64, and the `TypeSafe-Danger-Zone-Images: true` header it requires is added
+  for you. Images are marked experimental by TypeSafe and may change.
 
 ## Code owns the decision
 
@@ -134,7 +197,19 @@ let route = if response.noul("security").unwrap().yes_above(0.7) {
 
 `confidence` measures how concentrated the distribution is. It is not the probability
 that the answer is right. Tune thresholds on your own data, and pin a versioned model
-such as `"jev-1.13.0"` once you have. `jev-latest` moves when a new release ships.
+such as `"jev-1.14.0"` once you have. The aliases move when a new release ships.
+
+| Model | Notes |
+| --- | --- |
+| `jev-1.14.0` | the newest release (14 October 2026); the only one with Box questions |
+| `jev-1.13.0` | the previous release |
+| `jev-latest` | the newest *stable* release; the default. `jev-1.13.0` as of 16 October 2026 |
+| `jev-preview` | the newest release of any kind. `jev-1.14.0` as of 16 October 2026 |
+
+All models take 64k tokens per request and 32k per question. `client.models()` lists
+what the account can send; versioned ids work whether or not they're listed. For a
+state that doesn't fit, `CallOptions::long_context()` raises both limits to 262k tokens
+at the same price per token, but slower and less accurate.
 
 For many items, run calls concurrently. The client is cheap to clone and shares its
 connection pool:
@@ -165,7 +240,7 @@ use std::time::Duration;
 use typesafe::{Client, Config};
 
 let client = Client::with_config(
-    Config::from_env().model("jev-1.13.0").timeout(Duration::from_secs(5)),
+    Config::from_env().model("jev-1.14.0").timeout(Duration::from_secs(5)),
 )?;
 ```
 
@@ -177,8 +252,9 @@ Calls then fail with `ErrorKind::NoApiKey` without making a request.
 `client.is_configured()` tells you which case you are in.
 
 `system_one_with` takes `CallOptions` to override the model, timeout, retry policy
-and headers for one call. `CallOptions::extra_body` adds top-level fields for API
-features this client predates.
+and headers for one call, to attach [images](#images-and-box-questions) with `image`,
+and to raise the context limits with `long_context`. `CallOptions::extra_body` adds
+top-level fields for API features this client predates.
 
 ## Errors and retries
 
@@ -198,6 +274,7 @@ It displays as `422 questions.tone.criteria: field required (request_id=...)`.
 | `NoApiKey` | no key configured; no request made |
 | `InvalidRequest` | a malformed call, such as a Choice with no options; no request made |
 | `BadRequest`, `Authentication`, `PermissionDenied`, `NotFound` | 400, 401, 403, 404 |
+| `PayloadTooLarge` | 413; the request is over 32 MiB, as it can be with images |
 | `UnprocessableEntity` | 422; the message lists each field as `path: problem` |
 | `RateLimited`, `Overloaded`, `ServerError`, `HttpError` | 429, 529, other 5xx, anything else |
 | `Timeout`, `Connection` | no response |
@@ -225,6 +302,7 @@ let never = RetryPolicy::disabled();
 ```sh
 TYPESAFE_API_KEY=... cargo run --example triage --features blocking   # routing tickets
 TYPESAFE_API_KEY=... cargo run --example factcheck                    # concurrent calls
+TYPESAFE_API_KEY=... cargo run --example locate --features blocking -- photo.jpg "the dog"   # Box
 ```
 
 ## Developing

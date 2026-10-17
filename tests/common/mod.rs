@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use typesafe::{Choice, Config, Noul, Questions, RetryPolicy, Score};
+use typesafe::{BoxQuestion, Choice, Config, Image, Noul, Questions, RetryPolicy, Score};
 
 pub fn questions() -> Questions {
     Questions::new()
@@ -37,6 +37,36 @@ pub fn answers() -> Value {
                         "confidence": 0.99}
         },
         "usage": {"input_tokens": 367, "output_tokens": 75}
+    })
+}
+
+/// A 400x400 white image with one red rectangle at left 0.5, right 0.9, top 0.2,
+/// bottom 0.5 (as fractions of the image).
+pub fn red_rectangle() -> Image {
+    Image::from_path(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/red-rectangle.png"
+    ))
+    .unwrap()
+}
+
+/// Where to find the rectangle, and whether it is there.
+pub fn rectangle_questions() -> Questions {
+    Questions::new()
+        .ask("present", Noul::new("Is there a red rectangle in `photo`?"))
+        .ask("rect", BoxQuestion::new("The red rectangle in `photo`"))
+}
+
+pub fn rectangle_answers() -> Value {
+    json!({
+        "model": "jev-1.14.0",
+        "answers": {
+            "present": {"type": "noul", "noul": 0.97},
+            "rect": {"type": "box",
+                     "box": {"top": 0.14, "bottom": 0.52, "left": 0.5, "right": 0.91},
+                     "confidence": 0.95}
+        },
+        "usage": {"input_tokens": 755, "output_tokens": 36}
     })
 }
 

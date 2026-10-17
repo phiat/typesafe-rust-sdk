@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use crate::image::Image;
 use crate::retry::RetryPolicy;
+
+const LONG_CONTEXT_HEADER: &str = "typesafe-danger-zone-long-context";
 
 pub const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 pub const DEFAULT_MODEL: &str = "jev-latest";
@@ -38,7 +41,7 @@ pub const ENV_DEFAULT_MODEL: &str = "TYPESAFE_DEFAULT_MODEL";
 /// use typesafe::Config;
 ///
 /// let config = Config::from_env()
-///     .model("jev-1.13.0")
+///     .model("jev-1.14.0")
 ///     .timeout(Duration::from_secs(5));
 /// ```
 #[derive(Clone)]
@@ -104,8 +107,9 @@ impl Config {
     }
 
     /// The model calls use unless they name one. Pin a versioned model such as
-    /// `jev-1.13.0` once thresholds are tuned; `jev-latest` moves when a new
-    /// release ships.
+    /// `jev-1.14.0` once thresholds are tuned; the aliases move when a new
+    /// release ships. `jev-latest` is the newest stable release and
+    /// `jev-preview` the newest of any kind.
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
@@ -159,7 +163,7 @@ impl fmt::Debug for Config {
 /// use typesafe::{CallOptions, RetryPolicy};
 ///
 /// let options = CallOptions::new()
-///     .model("jev-1.13.0")
+///     .model("jev-1.14.0")
 ///     .timeout(Duration::from_secs(2))
 ///     .retry(RetryPolicy::disabled());
 /// ```
@@ -170,11 +174,31 @@ pub struct CallOptions {
     pub(crate) retry: Option<RetryPolicy>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) extra_body: Map<String, Value>,
+    pub(crate) images: Vec<Image>,
 }
 
 impl CallOptions {
     pub fn new() -> Self {
         CallOptions::default()
+    }
+
+    /// Sends `image` with the call. Something in the state or the questions has
+    /// to refer to it, by its [reference](Image::reference); a call with an
+    /// image nothing refers to, or a reference to an image not attached here,
+    /// fails before anything is sent. Repeat for more images.
+    ///
+    /// The images header the API requires is added for you.
+    pub fn image(mut self, image: &Image) -> Self {
+        self.images.push(image.clone());
+        self
+    }
+
+    /// Raises the per-request and per-question context limits from 64k to 262k
+    /// tokens, by sending `TypeSafe-Danger-Zone-Long-Context: true`. The price
+    /// per token is the same, but the model is slower and less accurate, so use
+    /// it only when the state doesn't fit.
+    pub fn long_context(self) -> Self {
+        self.header(LONG_CONTEXT_HEADER, "true")
     }
 
     pub fn model(mut self, model: impl Into<String>) -> Self {
@@ -223,11 +247,11 @@ mod tests {
         let config = from(&[
             ("TYPESAFE_API_KEY", " key "),
             ("TYPESAFE_BASE_URL", "http://localhost:4000/"),
-            ("TYPESAFE_DEFAULT_MODEL", "jev-1.13.0"),
+            ("TYPESAFE_DEFAULT_MODEL", "jev-1.14.0"),
         ]);
         assert_eq!(config.api_key.as_deref(), Some("key"));
         assert_eq!(config.base_url, "http://localhost:4000");
-        assert_eq!(config.model, "jev-1.13.0");
+        assert_eq!(config.model, "jev-1.14.0");
     }
 
     #[test]

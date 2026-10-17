@@ -94,7 +94,7 @@ impl Client {
     }
 
     /// The model names the account can send, aliases included. Versioned ids
-    /// such as `jev-1.13.0` are accepted whether or not they're listed.
+    /// such as `jev-1.14.0` are accepted whether or not they're listed.
     pub async fn models(&self) -> Result<Vec<Model>, Error> {
         let prepared = request::models(&self.config)?;
         let success = self.execute(prepared).await?;

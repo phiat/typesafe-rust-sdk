@@ -6,7 +6,7 @@ mod common;
 
 use mockito::{Matcher, Server};
 use serde_json::json;
-use typesafe::{Client, Config, ErrorKind};
+use typesafe::{CallOptions, Client, Config, ErrorKind};
 
 use common::*;
 
@@ -30,6 +30,38 @@ async fn answers_all_three_types() {
     assert_eq!(response.noul("billing").unwrap().noul, 0.99);
     assert_eq!(response.choice("tone").unwrap().choice, "frustrated");
     assert!((response.score("urgency").unwrap().normalized() - 0.995).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn locates_something_in_an_image() {
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/systemone")
+        .match_header("typesafe-danger-zone-images", "true")
+        .match_header(
+            "content-type",
+            Matcher::Regex("^multipart/form-data; ".into()),
+        )
+        .with_body(rectangle_answers().to_string())
+        .create_async()
+        .await;
+
+    let photo = red_rectangle();
+    let client = Client::with_config(config(&server.url())).unwrap();
+    let response = client
+        .system_one_with(
+            &json!({"photo": photo}),
+            &rectangle_questions(),
+            &CallOptions::new().image(&photo),
+        )
+        .await
+        .unwrap();
+    mock.assert_async().await;
+
+    let (left, top, right, bottom) = response.bounding_box("rect").unwrap().pixels(400, 400);
+    for (got, want) in [(left, 200.0), (top, 56.0), (right, 364.0), (bottom, 208.0)] {
+        assert!((got - want).abs() < 1e-9, "{got} != {want}");
+    }
 }
 
 #[tokio::test]

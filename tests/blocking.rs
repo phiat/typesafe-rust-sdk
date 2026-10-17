@@ -55,6 +55,73 @@ fn answers_all_three_types() {
 }
 
 #[test]
+fn locates_something_in_an_image() {
+    let mut server = Server::new();
+    let mock = server
+        .mock("POST", "/v1/systemone")
+        .match_header("typesafe-danger-zone-images", "true")
+        .match_header(
+            "content-type",
+            Matcher::Regex("^multipart/form-data; boundary=typesafe-[0-9a-f]{32}$".into()),
+        )
+        // The request JSON, then the image as a file part.
+        .match_body(Matcher::Regex(
+            r#"(?s)name="request".*"questions":\{.*"type":"box".*name="image0"; filename="image0.png""#
+                .into(),
+        ))
+        .with_body(rectangle_answers().to_string())
+        .create();
+
+    let photo = red_rectangle();
+    let response = client(&server)
+        .system_one_with(
+            &json!({"photo": photo}),
+            &rectangle_questions(),
+            &CallOptions::new().model("jev-1.14.0").image(&photo),
+        )
+        .unwrap();
+    mock.assert();
+
+    assert_eq!(response.model, "jev-1.14.0");
+    assert!(response.noul("present").unwrap().yes());
+    let rect = response.bounding_box("rect").unwrap();
+    assert_eq!((rect.left, rect.right), (0.5, 0.91));
+    assert_eq!(rect.confidence, Some(0.95));
+    assert!(response.bounding_box("present").is_none());
+}
+
+#[test]
+fn a_box_without_an_image_makes_no_request() {
+    let mut server = Server::new();
+    let mock = server.mock("POST", "/v1/systemone").expect(0).create();
+
+    let error = client(&server)
+        .system_one(&json!({"photo": "none"}), &rectangle_questions())
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidRequest);
+    assert!(error.message().contains("needs an image"), "{error}");
+    mock.assert();
+}
+
+#[test]
+fn a_413_is_a_payload_too_large_error() {
+    let mut server = Server::new();
+    server
+        .mock("POST", "/v1/systemone")
+        .with_status(413)
+        .with_body(
+            r#"{"detail": {"error_type": "api_usage_error", "message": "Request too large."}}"#,
+        )
+        .create();
+
+    let error = client(&server)
+        .system_one(&ticket(), &questions())
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::PayloadTooLarge);
+    assert_eq!(error.message(), "Request too large.");
+}
+
+#[test]
 fn a_missing_key_makes_no_request() {
     let mut server = Server::new();
     let mock = server.mock("POST", "/v1/systemone").expect(0).create();
