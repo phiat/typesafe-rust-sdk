@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::answer::{self, Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer};
+use crate::answer::{self, Answer, BoxAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer};
 use crate::question::Questions;
 
 /// Tokens used by a call. Only input tokens are billed.
@@ -17,7 +17,7 @@ pub struct Usage {
 /// The result of a System One call.
 ///
 /// - `answers`: one answer per question, under the id the question used
-/// - `model`: the versioned model that answered, such as `jev-1.13.0`, even
+/// - `model`: the versioned model that answered, such as `jev-1.14.0`, even
 ///   when the call named an alias like `jev-latest`. Store it next to anything
 ///   you keep, so a threshold can be traced to the model it was tuned on.
 /// - `usage`: tokens used
@@ -50,6 +50,12 @@ impl Response {
     /// The answer to the Score asked under `id`.
     pub fn score(&self, id: &str) -> Option<&ScoreAnswer> {
         self.answer(id).and_then(Answer::as_score)
+    }
+
+    /// The answer to the [`BoxQuestion`](crate::BoxQuestion) asked under `id`.
+    /// Not named `box`, which Rust reserves.
+    pub fn bounding_box(&self, id: &str) -> Option<&BoxAnswer> {
+        self.answer(id).and_then(Answer::as_box)
     }
 
     /// The answer to the raw question asked under `id`.

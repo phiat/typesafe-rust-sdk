@@ -12,6 +12,7 @@
 //! | [`Noul`] | whether a condition holds | [`NoulAnswer`]: the probability of yes |
 //! | [`Choice`] | which one of a defined set | [`ChoiceAnswer`]: option, probabilities, confidence |
 //! | [`Score`] | how far along ordered levels | [`ScoreAnswer`]: weighted level, probabilities, confidence |
+//! | [`BoxQuestion`] | where something is in an [`Image`] | [`BoxAnswer`]: the box's four edges, as fractions |
 //!
 //! ```no_run
 //! use serde_json::json;
@@ -50,6 +51,7 @@
 mod answer;
 mod config;
 mod error;
+mod image;
 mod question;
 mod request;
 mod response;
@@ -60,7 +62,7 @@ pub mod blocking;
 #[cfg(feature = "async")]
 mod client;
 
-pub use answer::{Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer};
+pub use answer::{Answer, BoxAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer};
 #[cfg(feature = "async")]
 pub use client::Client;
 pub use config::{
@@ -68,6 +70,7 @@ pub use config::{
     ENV_BASE_URL, ENV_DEFAULT_MODEL,
 };
 pub use error::{Error, ErrorKind};
-pub use question::{Choice, Noul, Question, Questions, Score};
+pub use image::Image;
+pub use question::{BoxQuestion, Choice, Noul, Question, Questions, Score};
 pub use response::{Model, Response, Usage};
 pub use retry::RetryPolicy;
