@@ -121,6 +121,59 @@ fn a_413_is_a_payload_too_large_error() {
     assert_eq!(error.message(), "Request too large.");
 }
 
+/// A state big enough to be worth compressing.
+#[cfg(any(feature = "gzip", feature = "zstd"))]
+fn long_ticket() -> serde_json::Value {
+    json!({"ticket": "I was charged twice. Please fix this. ".repeat(100)})
+}
+
+#[cfg(any(feature = "gzip", feature = "zstd"))]
+#[test]
+fn compressed_requests_reach_the_server_intact() {
+    use typesafe::Compression;
+
+    let mut codecs: Vec<(Compression, &str)> = Vec::new();
+    #[cfg(feature = "gzip")]
+    codecs.push((Compression::Gzip, "gzip"));
+    #[cfg(feature = "zstd")]
+    codecs.push((Compression::Zstd, "zstd"));
+
+    for (codec, encoding) in codecs {
+        let mut server = Server::new();
+        let mock = server
+            .mock("POST", "/v1/systemone")
+            .match_header("content-encoding", encoding)
+            .match_header("content-type", "application/json")
+            .match_request(move |request| {
+                let raw = request.body().unwrap();
+                let json = match encoding {
+                    #[cfg(feature = "gzip")]
+                    "gzip" => {
+                        let mut out = Vec::new();
+                        std::io::Read::read_to_end(
+                            &mut flate2::read::GzDecoder::new(&raw[..]),
+                            &mut out,
+                        )
+                        .unwrap();
+                        out
+                    }
+                    #[cfg(feature = "zstd")]
+                    "zstd" => zstd::decode_all(&raw[..]).unwrap(),
+                    _ => unreachable!(),
+                };
+                let body: serde_json::Value = serde_json::from_slice(&json).unwrap();
+                body["state"] == long_ticket() && body["questions"]["billing"]["type"] == "noul"
+            })
+            .with_body(answers().to_string())
+            .create();
+
+        let client = Client::with_config(config(&server.url()).compression(codec)).unwrap();
+        let response = client.system_one(&long_ticket(), &questions()).unwrap();
+        mock.assert();
+        assert!(response.noul("billing").unwrap().yes());
+    }
+}
+
 #[test]
 fn a_missing_key_makes_no_request() {
     let mut server = Server::new();

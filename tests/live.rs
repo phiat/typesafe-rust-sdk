@@ -116,6 +116,48 @@ fn accepts_the_long_context_header() {
     assert!(response.noul("hello").unwrap().yes());
 }
 
+/// The API takes each codec the crate was built with, for plain and multipart bodies.
+#[cfg(any(feature = "gzip", feature = "zstd"))]
+#[test]
+#[ignore = "calls the live API"]
+fn accepts_compressed_requests() {
+    use typesafe::Compression;
+
+    let codecs: &[Compression] = &[
+        #[cfg(feature = "gzip")]
+        Compression::Gzip,
+        #[cfg(feature = "zstd")]
+        Compression::Zstd,
+    ];
+    let log = "The customer was charged twice and wants one charge refunded. ".repeat(80);
+    let photo = common::red_rectangle();
+    for &codec in codecs {
+        // A long text state.
+        let questions = Questions::new().ask("billing", Noul::new("Is this about billing?"));
+        let response = client()
+            .system_one_with(&log, &questions, &CallOptions::new().compression(codec))
+            .unwrap();
+        assert!(response.noul("billing").unwrap().yes(), "{codec:?}");
+
+        // A multipart body with an image in it.
+        let response = client()
+            .system_one_with(
+                &serde_json::json!({"photo": photo, "log": log}),
+                &common::rectangle_questions(),
+                &CallOptions::new()
+                    .model("jev-1.14.0")
+                    .image(&photo)
+                    .compression(codec),
+            )
+            .unwrap();
+        assert!(response.noul("present").unwrap().yes(), "{codec:?}");
+        assert!(
+            response.bounding_box("rect").unwrap().left < 0.7,
+            "{codec:?}"
+        );
+    }
+}
+
 #[test]
 #[ignore = "calls the live API"]
 fn a_bad_key_is_an_authentication_error() {

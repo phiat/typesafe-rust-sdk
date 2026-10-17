@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use crate::compression::Compression;
 use crate::image::Image;
 use crate::retry::RetryPolicy;
 
@@ -27,6 +28,7 @@ pub const ENV_DEFAULT_MODEL: &str = "TYPESAFE_DEFAULT_MODEL";
 /// | [`model`](Config::model) | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
 /// | [`timeout`](Config::timeout) | | 10 s per response |
 /// | [`retry`](Config::retry) | | [`RetryPolicy::default`] |
+/// | [`compression`](Config::compression) | | off |
 /// | [`header`](Config::header) | | extra request headers |
 ///
 /// [`Config::from_env`] reads the environment variables, and the setters
@@ -51,6 +53,7 @@ pub struct Config {
     pub(crate) model: String,
     pub(crate) timeout: Duration,
     pub(crate) retry: RetryPolicy,
+    pub(crate) compression: Compression,
     pub(crate) headers: Vec<(String, String)>,
 }
 
@@ -69,6 +72,7 @@ impl Config {
             model: DEFAULT_MODEL.to_string(),
             timeout: DEFAULT_TIMEOUT,
             retry: RetryPolicy::default(),
+            compression: Compression::Off,
             headers: Vec::new(),
         }
     }
@@ -126,6 +130,13 @@ impl Config {
         self
     }
 
+    /// Compresses request bodies of 1 KiB or more. Off unless set. See
+    /// [`Compression`] for the codecs, which are cargo features.
+    pub fn compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
+        self
+    }
+
     /// An extra header sent with every request.
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
@@ -151,6 +162,7 @@ impl fmt::Debug for Config {
             .field("model", &self.model)
             .field("timeout", &self.timeout)
             .field("retry", &self.retry)
+            .field("compression", &self.compression)
             .field("headers", &self.headers)
             .finish()
     }
@@ -172,6 +184,7 @@ pub struct CallOptions {
     pub(crate) model: Option<String>,
     pub(crate) timeout: Option<Duration>,
     pub(crate) retry: Option<RetryPolicy>,
+    pub(crate) compression: Option<Compression>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) extra_body: Map<String, Value>,
     pub(crate) images: Vec<Image>,
@@ -213,6 +226,13 @@ impl CallOptions {
 
     pub fn retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = Some(retry);
+        self
+    }
+
+    /// Overrides the client's [`Config::compression`] for this call, such as
+    /// [`Compression::Off`] to send one body as it is.
+    pub fn compression(mut self, compression: Compression) -> Self {
+        self.compression = Some(compression);
         self
     }
 

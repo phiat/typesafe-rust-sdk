@@ -1,6 +1,6 @@
 [package]
 name = "typesafe-rust-sdk"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Unofficial Rust client for TypeSafe's System One API (Jev)"
@@ -20,6 +20,10 @@ default = ["async", "rustls"]
 async = ["dep:tokio"]
 # `typesafe::blocking::Client`, for synchronous code such as a game loop.
 blocking = ["reqwest/blocking"]
+# Request-body compression, off unless asked for: see `Compression`.
+gzip = ["dep:flate2"]
+# Needs a C compiler to build.
+zstd = ["dep:zstd"]
 # TLS backends. With neither, only plain-HTTP base URLs work.
 rustls = ["reqwest/rustls"]
 native-tls = ["reqwest/native-tls"]
@@ -31,6 +35,8 @@ serde_json = { version = "1", features = ["raw_value"] }
 httpdate = "1"
 fastrand = "2"
 tokio = { version = "1", features = ["time"], optional = true }
+flate2 = { version = "1", optional = true }
+zstd = { version = "0.14", optional = true }
 
 [dev-dependencies]
 mockito = "1"

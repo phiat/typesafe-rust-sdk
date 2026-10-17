@@ -21,9 +21,10 @@ const SDK: &str = concat!("typesafe-rust-sdk/", env!("CARGO_PKG_VERSION"));
 /// Images are experimental, and the API refuses them without this header.
 const IMAGES_HEADER: &str = "typesafe-danger-zone-images";
 
-/// A request body and its content type.
+/// A request body, its content type and, if compressed, its content encoding.
 struct Payload {
     content_type: String,
+    content_encoding: Option<&'static str>,
     bytes: Vec<u8>,
 }
 
@@ -97,10 +98,18 @@ pub(crate) fn system_one<S: Serialize + ?Sized>(
     let payload = if images.is_empty() {
         Payload {
             content_type: "application/json".into(),
+            content_encoding: None,
             bytes: json,
         }
     } else {
         multipart(json, &images)
+    };
+    let compression = options.compression.unwrap_or(config.compression);
+    let (bytes, content_encoding) = compression.encode(payload.bytes)?;
+    let payload = Payload {
+        content_encoding,
+        bytes,
+        ..payload
     };
     prepare(
         config,
@@ -190,6 +199,7 @@ fn multipart(json: Vec<u8>, images: &[&Image]) -> Payload {
     bytes.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     Payload {
         content_type: format!("multipart/form-data; boundary={boundary}"),
+        content_encoding: None,
         bytes,
     }
 }
@@ -241,6 +251,10 @@ fn prepare(
     let content_type = body
         .as_ref()
         .map(|payload| ("content-type", payload.content_type.as_str()));
+    let content_encoding = body
+        .as_ref()
+        .and_then(|payload| payload.content_encoding)
+        .map(|encoding| ("content-encoding", encoding));
     let images = images.then_some((IMAGES_HEADER, "true"));
     let extra = config
         .headers
@@ -249,6 +263,7 @@ fn prepare(
     for (name, value) in defaults
         .into_iter()
         .chain(content_type)
+        .chain(content_encoding)
         .chain(images)
         .chain(extra.map(|(n, v)| (n.as_str(), v.as_str())))
     {
@@ -625,6 +640,111 @@ mod tests {
         let options = CallOptions::new().extra_body("assets", json!({"raw": 1}));
         let prepared = system_one(&config(), "text", &questions(), &options).unwrap();
         assert_eq!(body(&prepared)["assets"], json!({"raw": 1}));
+    }
+
+    fn big_state() -> Value {
+        json!({"log": "the customer repeats themselves. ".repeat(100)})
+    }
+
+    /// The request body as JSON, once undone from `encoding`.
+    #[cfg(any(feature = "gzip", feature = "zstd"))]
+    fn undo(prepared: &Prepared, encoding: &str) -> Value {
+        let raw = prepared.body.as_ref().unwrap();
+        let json = match encoding {
+            #[cfg(feature = "gzip")]
+            "gzip" => {
+                let mut out = Vec::new();
+                std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&raw[..]), &mut out)
+                    .unwrap();
+                out
+            }
+            #[cfg(feature = "zstd")]
+            "zstd" => zstd::decode_all(&raw[..]).unwrap(),
+            other => panic!("no decoder for {other}"),
+        };
+        serde_json::from_slice(&json).unwrap()
+    }
+
+    #[test]
+    fn compression_is_off_unless_asked_for() {
+        let prepared =
+            system_one(&config(), &big_state(), &questions(), &CallOptions::new()).unwrap();
+        assert!(!prepared.headers.contains_key("content-encoding"));
+        assert_eq!(body(&prepared)["state"], big_state());
+    }
+
+    #[cfg(any(feature = "gzip", feature = "zstd"))]
+    #[test]
+    #[allow(clippy::single_element_loop)] // one codec when only one feature is on
+    fn compressed_bodies_say_so_and_decode_to_the_same_request() {
+        for (codec, name) in [
+            #[cfg(feature = "gzip")]
+            (crate::Compression::Gzip, "gzip"),
+            #[cfg(feature = "zstd")]
+            (crate::Compression::Zstd, "zstd"),
+        ] {
+            let config = config().compression(codec);
+            let plain = system_one(
+                &self::config(),
+                &big_state(),
+                &questions(),
+                &CallOptions::new(),
+            )
+            .unwrap();
+            let prepared =
+                system_one(&config, &big_state(), &questions(), &CallOptions::new()).unwrap();
+
+            assert_eq!(prepared.headers["content-encoding"], name);
+            assert_eq!(prepared.headers["content-type"], "application/json");
+            assert!(prepared.body.as_ref().unwrap().len() < plain.body.as_ref().unwrap().len() / 5);
+            assert_eq!(undo(&prepared, name), body(&plain));
+
+            // A small body is not worth compressing.
+            let small = system_one(&config, "short", &questions(), &CallOptions::new()).unwrap();
+            assert!(!small.headers.contains_key("content-encoding"));
+            assert_eq!(body(&small)["state"], "short");
+
+            // A call can turn it off, or pick another codec over the client's.
+            let off = CallOptions::new().compression(crate::Compression::Off);
+            let prepared = system_one(&config, &big_state(), &questions(), &off).unwrap();
+            assert!(!prepared.headers.contains_key("content-encoding"));
+        }
+    }
+
+    #[cfg(feature = "gzip")]
+    #[test]
+    fn a_call_can_turn_compression_on() {
+        let options = CallOptions::new().compression(crate::Compression::Gzip);
+        let prepared = system_one(&config(), &big_state(), &questions(), &options).unwrap();
+        assert_eq!(prepared.headers["content-encoding"], "gzip");
+    }
+
+    #[cfg(feature = "gzip")]
+    #[test]
+    fn a_multipart_body_is_compressed_whole() {
+        let mug =
+            Image::from_bytes([&b"\x89PNG\r\n\x1a\n"[..], &[7u8; 4000][..]].concat()).unwrap();
+        let questions = Questions::new().ask("mug", BoxQuestion::new("The mug in `photo`"));
+        let options = CallOptions::new()
+            .image(&mug)
+            .compression(crate::Compression::Gzip);
+        let prepared = system_one(&config(), &json!({"photo": mug}), &questions, &options).unwrap();
+
+        // The content type still names the multipart boundary, and the bytes
+        // inside the encoding are the multipart body.
+        assert_eq!(prepared.headers["content-encoding"], "gzip");
+        assert!(
+            prepared.headers["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("multipart/form-data; boundary=")
+        );
+        assert_eq!(prepared.headers["typesafe-danger-zone-images"], "true");
+        let mut out = Vec::new();
+        let raw = prepared.body.as_ref().unwrap();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&raw[..]), &mut out).unwrap();
+        assert!(contains(&out, &[7u8; 4000]));
+        assert!(raw.len() < out.len() / 4);
     }
 
     #[test]
