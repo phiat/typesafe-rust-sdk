@@ -67,19 +67,23 @@ impl ImageFormat {
 /// use serde_json::json;
 /// use typesafe::{BoxQuestion, CallOptions, Image, Noul, Questions};
 ///
-/// # fn run(client: typesafe::blocking::Client) -> Result<(), typesafe::Error> {
+/// # #[cfg(feature = "async")]
+/// # async fn run(client: typesafe::Client) -> Result<(), typesafe::Error> {
 /// let photo = Image::from_path("kitchen.jpg")?;
 /// let questions = Questions::new()
 ///     .ask("mug_present", Noul::new("Is there a coffee mug in `photo`?"))
 ///     .ask("mug", BoxQuestion::new("The coffee mug in `photo`"));
 ///
-/// let response = client.system_one_with(
-///     &json!({ "photo": photo }),
-///     &questions,
-///     &CallOptions::new().model("jev-1.14.0").image(&photo),
-/// )?;
+/// let response = client
+///     .system_one_with(
+///         &json!({ "photo": photo }),
+///         &questions,
+///         &CallOptions::new().model("jev-1.14.0").image(&photo),
+///     )
+///     .await?;
 /// # Ok(())
 /// # }
+/// # fn main() {}
 /// ```
 #[derive(Clone)]
 pub struct Image {
